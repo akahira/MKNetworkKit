@@ -1188,10 +1188,13 @@ totalBytesExpectedToWrite:(NSInteger)totalBytesExpectedToWrite {
     }
     
   } else if (self.response.statusCode >= 400 && self.response.statusCode < 600 && ![self isCancelled]) {                        
-    
+    NSMutableDictionary *userInfo = [NSMutableDictionary dictionaryWithDictionary:self.response.allHeaderFields];
+    if (self.responseJSON && [[self.responseJSON objectForKey:@"human_readable"] boolValue]) {
+        [userInfo setObject:[self.responseJSON objectForKey:@"error"] forKey:@"x-body"];
+    }
     [self operationFailedWithError:[NSError errorWithDomain:NSURLErrorDomain
                                                        code:self.response.statusCode
-                                                   userInfo:self.response.allHeaderFields]];
+                                                   userInfo:userInfo]];
   }  
   [self endBackgroundTask];
   
