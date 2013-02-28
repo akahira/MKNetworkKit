@@ -44,7 +44,7 @@
 @property (nonatomic, strong) NSMutableDictionary *memoryCache;
 @property (nonatomic, strong) NSMutableArray *memoryCacheKeys;
 @property (nonatomic, strong) NSMutableDictionary *cacheInvalidationParams;
-@property (strong, nonatomic) NSMutableArray *cacheInvalidationParamKeys;
+@property (strong, nonatomic) NSMutableOrderedSet *cacheOrderedUniqueIds;
 
 
 -(void) saveCache;
@@ -352,7 +352,18 @@ static NSOperationQueue *_sharedNetworkQueue;
                    forKey:uniqueId];
       
       [self.cacheInvalidationParams setObject:completedCacheableOperation.cacheHeaders forKey:uniqueId];
-      [self insertCacheInvalidationParamForKey:uniqueId];
+      [self.cacheOrderedUniqueIds insertObject:uniqueId atIndex:0]; // remove it and insert it at start
+      if([self.cacheOrderedUniqueIds count] > [self cacheStorageCost]) {
+        NSString *lastKey = [self.cacheOrderedUniqueIds lastObject];
+        NSString *filePath = [[self cacheDirectoryName] stringByAppendingPathComponent:lastKey];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+          NSError *error = nil;
+          [[NSFileManager defaultManager] removeItemAtPath:filePath error:&error];
+          ELog(error);
+        }
+        [self.cacheInvalidationParams removeObjectForKey:lastKey];
+        [self.cacheOrderedUniqueIds removeObject:lastKey];
+      }
     }];
     
     __block double expiryTimeInSeconds = 0.0f;    
@@ -494,8 +505,9 @@ static NSOperationQueue *_sharedNetworkQueue;
   
   NSString *cacheInvalidationPlistFilePath = [[self cacheDirectoryName] stringByAppendingPathExtension:@"plist"];
   [self.cacheInvalidationParams writeToFile:cacheInvalidationPlistFilePath atomically:YES];
-  NSString *cacheInvalidationKeyPlistFilePath = [[self cacheDirectoryName] stringByAppendingString:@"Keys.plist"];
-  [self.cacheInvalidationParamKeys writeToFile:cacheInvalidationKeyPlistFilePath atomically:YES];
+
+  NSString *cacheOrderedPlistFilePath = [[self cacheDirectoryName] stringByAppendingString:@"Ordered.plist"];
+  [[self.cacheOrderedUniqueIds array] writeToFile:cacheOrderedPlistFilePath atomically:YES];
 }
 
 -(void) saveCacheData:(NSData*) data forKey:(NSString*) cacheDataKey
@@ -529,28 +541,6 @@ static NSOperationQueue *_sharedNetworkQueue;
   }
 }
 
-- (void)insertCacheInvalidationParamForKey:(NSString *)cacheDataKey
-{
-    if(![self isCacheEnabled]) return;
-
-    NSUInteger index = [self.cacheInvalidationParamKeys indexOfObject:cacheDataKey];
-    if(index != NSNotFound)
-        [self.cacheInvalidationParamKeys removeObjectAtIndex:index];
-
-    [self.cacheInvalidationParamKeys insertObject:cacheDataKey atIndex:0]; // remove it and insert it at start
-    if([self.cacheInvalidationParamKeys count] > [self cacheStorageCost]) {
-        NSString *lastDataKey = [self.cacheInvalidationParamKeys lastObject];
-        NSString *filePath = [[self cacheDirectoryName] stringByAppendingPathComponent:lastDataKey];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
-            NSError *error = nil;
-            [[NSFileManager defaultManager] removeItemAtPath:filePath error:&error];
-            ELog(error);
-        }
-        [self.cacheInvalidationParamKeys removeLastObject];
-        [self.cacheInvalidationParams removeObjectForKey:lastDataKey];
-    }
-}
-
 /*
  - (BOOL) dataOldness:(NSString*) imagePath
  {
@@ -572,7 +562,7 @@ static NSOperationQueue *_sharedNetworkQueue;
   self.memoryCache = [NSMutableDictionary dictionaryWithCapacity:[self cacheMemoryCost]];
   self.memoryCacheKeys = [NSMutableArray arrayWithCapacity:[self cacheMemoryCost]];
   self.cacheInvalidationParams = [NSMutableDictionary dictionary];
-  self.cacheInvalidationParamKeys = [NSMutableArray array];
+  self.cacheOrderedUniqueIds = [NSMutableOrderedSet orderedSet];
   
   NSString *cacheDirectory = [self cacheDirectoryName];
   BOOL isDirectory = YES;
@@ -593,13 +583,13 @@ static NSOperationQueue *_sharedNetworkQueue;
     self.cacheInvalidationParams = [NSMutableDictionary dictionaryWithContentsOfFile:cacheInvalidationPlistFilePath];
   }
 
-  NSString *cacheInvalidationKeyPlistFilePath = [cacheDirectory stringByAppendingString:@"Keys.plist"];
+  NSString *cacheOrderedPlistFilePath = [cacheDirectory stringByAppendingString:@"Ordered.plist"];
 
-  BOOL keysfileExists = [[NSFileManager defaultManager] fileExistsAtPath:cacheInvalidationKeyPlistFilePath];
+  BOOL orderdFileExists = [[NSFileManager defaultManager] fileExistsAtPath:cacheOrderedPlistFilePath];
 
-  if (keysfileExists)
+  if (orderdFileExists)
   {
-    self.cacheInvalidationParamKeys = [NSMutableArray arrayWithContentsOfFile:cacheInvalidationKeyPlistFilePath];
+    self.cacheOrderedUniqueIds = [NSMutableOrderedSet orderedSetWithArray:[NSArray arrayWithContentsOfFile:cacheOrderedPlistFilePath]];
   }
 
 #if TARGET_OS_IPHONE
@@ -652,8 +642,8 @@ static NSOperationQueue *_sharedNetworkQueue;
   if(error) DLog(@"%@", error);
 
   error = nil;
-  NSString *cacheInvalidationKeyPlistFilePath = [[self cacheDirectoryName] stringByAppendingString:@"Keys.plist"];
-  [[NSFileManager defaultManager] removeItemAtPath:cacheInvalidationKeyPlistFilePath error:&error];
+  NSString *cacheOrderedPlistFilePath = [[self cacheDirectoryName] stringByAppendingString:@"Ordered.plist"];
+  [[NSFileManager defaultManager] removeItemAtPath:cacheOrderedPlistFilePath error:&error];
   if(error) DLog(@"%@", error);
 }
 
