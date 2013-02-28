@@ -44,6 +44,7 @@
 @property (nonatomic, strong) NSMutableDictionary *memoryCache;
 @property (nonatomic, strong) NSMutableArray *memoryCacheKeys;
 @property (nonatomic, strong) NSMutableDictionary *cacheInvalidationParams;
+@property (strong, nonatomic) NSMutableOrderedSet *cacheOrderedUniqueIds;
 
 
 -(void) saveCache;
@@ -351,6 +352,18 @@ static NSOperationQueue *_sharedNetworkQueue;
                    forKey:uniqueId];
       
       [self.cacheInvalidationParams setObject:completedCacheableOperation.cacheHeaders forKey:uniqueId];
+      [self.cacheOrderedUniqueIds insertObject:uniqueId atIndex:0]; // remove it and insert it at start
+      if([self.cacheOrderedUniqueIds count] > [self cacheStorageCost]) {
+        NSString *lastKey = [self.cacheOrderedUniqueIds lastObject];
+        NSString *filePath = [[self cacheDirectoryName] stringByAppendingPathComponent:lastKey];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+          NSError *error = nil;
+          [[NSFileManager defaultManager] removeItemAtPath:filePath error:&error];
+          ELog(error);
+        }
+        [self.cacheInvalidationParams removeObjectForKey:lastKey];
+        [self.cacheOrderedUniqueIds removeObject:lastKey];
+      }
     }];
     
     __block double expiryTimeInSeconds = 0.0f;    
@@ -467,6 +480,11 @@ static NSOperationQueue *_sharedNetworkQueue;
   return MKNETWORKCACHE_DEFAULT_COST;
 }
 
+-(int) cacheStorageCost {
+    
+    return MKNETWORKCACHE_DEFAULT_STORAGE_COST;
+}
+
 -(void) saveCache {
   
   for(NSString *cacheKey in [self.memoryCache allKeys])
@@ -487,6 +505,9 @@ static NSOperationQueue *_sharedNetworkQueue;
   
   NSString *cacheInvalidationPlistFilePath = [[self cacheDirectoryName] stringByAppendingPathExtension:@"plist"];
   [self.cacheInvalidationParams writeToFile:cacheInvalidationPlistFilePath atomically:YES];
+
+  NSString *cacheOrderedPlistFilePath = [[self cacheDirectoryName] stringByAppendingString:@"Ordered.plist"];
+  [[self.cacheOrderedUniqueIds array] writeToFile:cacheOrderedPlistFilePath atomically:YES];
 }
 
 -(void) saveCacheData:(NSData*) data forKey:(NSString*) cacheDataKey
@@ -515,7 +536,7 @@ static NSOperationQueue *_sharedNetworkQueue;
       [data writeToFile:filePath atomically:YES];
       
       [self.memoryCacheKeys removeLastObject];
-      [self.memoryCache removeObjectForKey:lastKey];        
+      [self.memoryCache removeObjectForKey:lastKey];
     }
   }
 }
@@ -541,6 +562,7 @@ static NSOperationQueue *_sharedNetworkQueue;
   self.memoryCache = [NSMutableDictionary dictionaryWithCapacity:[self cacheMemoryCost]];
   self.memoryCacheKeys = [NSMutableArray arrayWithCapacity:[self cacheMemoryCost]];
   self.cacheInvalidationParams = [NSMutableDictionary dictionary];
+  self.cacheOrderedUniqueIds = [NSMutableOrderedSet orderedSet];
   
   NSString *cacheDirectory = [self cacheDirectoryName];
   BOOL isDirectory = YES;
@@ -560,8 +582,17 @@ static NSOperationQueue *_sharedNetworkQueue;
   {
     self.cacheInvalidationParams = [NSMutableDictionary dictionaryWithContentsOfFile:cacheInvalidationPlistFilePath];
   }
-  
-#if TARGET_OS_IPHONE        
+
+  NSString *cacheOrderedPlistFilePath = [cacheDirectory stringByAppendingString:@"Ordered.plist"];
+
+  BOOL orderdFileExists = [[NSFileManager defaultManager] fileExistsAtPath:cacheOrderedPlistFilePath];
+
+  if (orderdFileExists)
+  {
+    self.cacheOrderedUniqueIds = [NSMutableOrderedSet orderedSetWithArray:[NSArray arrayWithContentsOfFile:cacheOrderedPlistFilePath]];
+  }
+
+#if TARGET_OS_IPHONE
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(saveCache)
                                                name:UIApplicationDidReceiveMemoryWarningNotification
                                              object:nil];
@@ -608,6 +639,11 @@ static NSOperationQueue *_sharedNetworkQueue;
   error = nil;
   NSString *cacheInvalidationPlistFilePath = [[self cacheDirectoryName] stringByAppendingPathExtension:@"plist"];
   [[NSFileManager defaultManager] removeItemAtPath:cacheInvalidationPlistFilePath error:&error];
+  if(error) DLog(@"%@", error);
+
+  error = nil;
+  NSString *cacheOrderedPlistFilePath = [[self cacheDirectoryName] stringByAppendingString:@"Ordered.plist"];
+  [[NSFileManager defaultManager] removeItemAtPath:cacheOrderedPlistFilePath error:&error];
   if(error) DLog(@"%@", error);
 }
 
